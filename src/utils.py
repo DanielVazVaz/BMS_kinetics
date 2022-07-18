@@ -16,6 +16,8 @@ from fit_prior import read_prior_par
 import warnings
 warnings.filterwarnings('ignore')
 from tqdm.auto import tqdm
+import pickle
+import matplotlib.pyplot as plt
 
 class PriorError(Exception):
     pass
@@ -23,10 +25,11 @@ class ScalingError(Exception):
     pass
 
 class BMS_instance:
-    def __init__(self, experiment: str, noutputs:int = 1, chosen_output:int = 1):
+    def __init__(self, experiment: str = None, noutputs:int = 1, chosen_output:int = 1, scaling = None):
         """
         Load the data of an experiment
         """
+        self.experiment = experiment
         folder_data = r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\Data"
         file_data = folder_data + "\\" + experiment + "\\data.xlsx"
         self.train = pd.read_excel(file_data, sheet_name="train", index_col = 0)
@@ -34,7 +37,12 @@ class BMS_instance:
         self.noutputs = noutputs
         self.ninputs  = self.train.shape[1] - self.noutputs
         self.init_prior()
-        self.init_tree(chosen_output=1)
+        self.init_tree(scaling = scaling, chosen_output=chosen_output)
+        
+    @staticmethod
+    def load(load):
+        with open(load, "rb") as input_file:
+                return pickle.load(input_file)
         
     def init_prior(self):
         prior_folder = r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\BMS\Prior"
@@ -47,19 +55,33 @@ class BMS_instance:
         self.prior_par = read_prior_par(prior_folder + "\\" + self.chosen_prior)
     
     def init_tree(self, chosen_output = 1, scaling = None):
+        self.x_test  = self.test.iloc[:,:self.ninputs].copy()
+        self.y_test  = self.test.iloc[:, self.ninputs + chosen_output - 1].copy()
+        self.y_test  = pd.Series(list(self.y_test))
+        self.x_test.columns = ["x" + str(i+1) for i in range(len(self.x_test.columns))]
         self.x  = self.train.iloc[:,:self.ninputs].copy()
         self.y  = self.train.iloc[:, self.ninputs + chosen_output - 1].copy()
         self.y  = pd.Series(list(self.y))
         self.x.columns = ["x" + str(i+1) for i in range(len(self.x.columns))]
+        self.scaling = scaling
+        x_scaling_mean = self.x.mean()
+        y_scaling_mean = self.y.mean()
+        x_scaling_std  = self.x.std()
+        y_scaling_std  = self.y.std()
+        self.scaling_param = {"mean": [x_scaling_mean, y_scaling_mean], "std": [x_scaling_std, y_scaling_std]}
         if scaling == "inputs":
-            self.x = (self.x - self.x.mean())/self.x.std()
+            self.x = (self.x - x_scaling_mean)/x_scaling_std
+            self.x_test = (self.x_test - x_scaling_mean)/x_scaling_std
         elif scaling == "outputs":
-            self.y = (self.y - self.y.mean())/self.y.std()
+            self.y = (self.y - y_scaling_mean)/y_scaling_std
+            self.y_test = (self.y_test - y_scaling_mean)/y_scaling_std
         elif scaling == "both":
-            self.x = (self.x - self.x.mean())/self.x.std()
-            self.y = (self.y - self.y.mean())/self.y.std()
+            self.x = (self.x - x_scaling_mean)/x_scaling_std
+            self.x_test = (self.x_test - x_scaling_mean)/x_scaling_std
+            self.y = (self.y - y_scaling_mean)/y_scaling_std
+            self.y_test = (self.y_test - y_scaling_mean)/y_scaling_std
         elif not scaling:
-            pass
+            self.scaling = "None"
         else:
             raise ScalingError
         
@@ -72,9 +94,10 @@ class BMS_instance:
             prior_par=self.prior_par,
         )
         
-    def run_BMS(self, mcmcsteps = 232):
+    def run_BMS(self, mcmcsteps = 232, save_distance = 100):
         self.description_lengths, self.mdl, self.mdl_model = [], np.inf, None
         pbar = tqdm(range(mcmcsteps), desc = "Running BMS: ")
+        result_folder = r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\Results"
         for i in pbar:
             pbar.set_description("Running BMS: [{0}/{1}]: ".format(i+1, mcmcsteps))
             # MCMC update
@@ -89,8 +112,62 @@ class BMS_instance:
             # Update the progress bar
             #f.value += 1
             #f.description = 'Run:{0}'.format(i)
+            # Save pickle
+            if (i+1)%save_distance == 0:
+                with open(result_folder + "\\" + r'{2}_{0}_{1}.pkl'.format(self.scaling, (i+1), self.experiment), 'wb') as outp:
+                    pickle.dump(self, outp, pickle.HIGHEST_PROTOCOL)
+                    
+    def plot_dlength(self):
+        ## WE check some stats:
+        print('Best model:\t', self.mdl_model)
+        print('Desc. length:\t', self.mdl)
+        print("BIC:\t", self.mdl_model.bic)
+        print("Par:\t", self.mdl_model.par_values["d0"])
+        ## We display the DL
+        plt.figure(figsize=(15, 5))
+        plt.plot(self.description_lengths)
+        
+        plt.xlabel('MCMC step', fontsize=14)
+        plt.ylabel('Description length', fontsize=14)
+        
+        plt.title('MDL model: $%s$' % self.mdl_model.latex())
+        plt.show()
+        
+    def plot_rsquare(self):
+        print('Best model:\t', self.mdl_model)
+        print('Desc. length:\t', self.mdl)
+        print("BIC:\t", self.mdl_model.bic)
+        print("Par:\t", self.mdl_model.par_values["d0"])
+        
+        predicted_train = self.mdl_model.predict(self.x)
+        predicted_test  = self.mdl_model.predict(self.x_test)
+        SSR_train = ((self.y - predicted_train)**2).sum()
+        SST_train = ((self.y - self.y.mean())**2).sum()
+        R2_train  = 1 - SSR_train/SST_train 
+        SSR_test  = ((self.y_test - predicted_test)**2).sum()
+        SST_test  = ((self.y_test - self.y_test.mean())**2).sum()
+        R2_test   = 1 - SSR_test/SST_test
+        MSE_train = ((self.y - predicted_train)**2).sum()/self.y.shape[0]
+        MSE_test  = ((self.y_test - predicted_test)**2).sum()/self.y_test.shape[0]
+        plt.figure(figsize=(6, 4), dpi = 200)
+        ax = plt.gca()
+        plt.scatter(predicted_train, self.y, color = "blue", label = "training")
+        plt.scatter(predicted_test, self.y_test, color = "red", label = "test")
+        lims = [np.min([ax.get_xlim(), ax.get_ylim()]),  # min of both axes
+                np.max([ax.get_xlim(), ax.get_ylim()]),  # max of both axes
+                ]
+        ax.plot(lims, lims, 'k-', alpha=0.75, zorder=0)
+        ax.set_xlim(lims)
+        ax.set_ylim(lims)
+        plt.xlabel('MDL model predictions', fontsize=14)
+        plt.ylabel('Actual values', fontsize=14)
+        plt.title(f"$R^2_{{train}} = {R2_train:.4f}\qquad R^2_{{test}} = {R2_test:.4f}$\n$MSE_{{train}} = {MSE_train:.3e} \qquad  MSE_{{test}} = {MSE_test:.3e}$")
+        plt.legend(loc = "best")
+        plt.show()
+        
+            
             
 if __name__ == "__main__":
     a = BMS_instance("Haber_Bosch")     
-    a.run_BMS()
+    a.run_BMS(300)
     print(a.mdl_model)
