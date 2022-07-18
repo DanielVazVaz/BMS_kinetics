@@ -4,7 +4,7 @@
 import sys
 import os
 import re
-BMS_FOLDER = r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\BMS"
+BMS_FOLDER = r"Local\BMS"
 sys.path.append(BMS_FOLDER)
 sys.path.append(BMS_FOLDER + "\\" + "Prior")
 import pandas as pd
@@ -30,7 +30,7 @@ class BMS_instance:
         Load the data of an experiment
         """
         self.experiment = experiment
-        folder_data = r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\Data"
+        folder_data = r"Local\Data"
         file_data = folder_data + "\\" + experiment + "\\data.xlsx"
         self.train = pd.read_excel(file_data, sheet_name="train", index_col = 0)
         self.test  = pd.read_excel(file_data, sheet_name="test", index_col = 0)
@@ -38,6 +38,7 @@ class BMS_instance:
         self.ninputs  = self.train.shape[1] - self.noutputs
         self.init_prior()
         self.init_tree(scaling = scaling, chosen_output=chosen_output)
+        self.chosen_output = chosen_output
         
     @staticmethod
     def load(load):
@@ -45,7 +46,7 @@ class BMS_instance:
                 return pickle.load(input_file)
         
     def init_prior(self):
-        prior_folder = r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\BMS\Prior"
+        prior_folder = r"BMS\Prior"
         prior_files  = os.listdir(prior_folder)
         self.valid_priors = [i for i in prior_files if ".nv{0}.".format(self.ninputs) in i]
         self.chosen_prior = self.valid_priors[-1]
@@ -97,7 +98,7 @@ class BMS_instance:
     def run_BMS(self, mcmcsteps = 232, save_distance = 100):
         self.description_lengths, self.mdl, self.mdl_model = [], np.inf, None
         pbar = tqdm(range(mcmcsteps), desc = "Running BMS: ")
-        result_folder = r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\Results"
+        result_folder = r"Local\Results"
         for i in pbar:
             pbar.set_description("Running BMS: [{0}/{1}]: ".format(i+1, mcmcsteps))
             # MCMC update
@@ -114,7 +115,7 @@ class BMS_instance:
             #f.description = 'Run:{0}'.format(i)
             # Save pickle
             if (i+1)%save_distance == 0:
-                with open(result_folder + "\\" + r'{2}_{0}_{1}.pkl'.format(self.scaling, (i+1), self.experiment), 'wb') as outp:
+                with open(result_folder + "\\" + r'{2}_Out{3}_Scale{0}_{1}.pkl'.format(self.scaling, (i+1), self.experiment, self.chosen_output), 'wb') as outp:
                     pickle.dump(self, outp, pickle.HIGHEST_PROTOCOL)
                     
     def plot_dlength(self):
