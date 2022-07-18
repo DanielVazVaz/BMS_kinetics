@@ -4,7 +4,7 @@
 import sys
 import os
 import re
-BMS_FOLDER = r"Local\BMS"
+from .config import BMS_FOLDER
 sys.path.append(BMS_FOLDER)
 sys.path.append(BMS_FOLDER + "\\" + "Prior")
 import pandas as pd
@@ -46,7 +46,7 @@ class BMS_instance:
                 return pickle.load(input_file)
         
     def init_prior(self):
-        prior_folder = r"BMS\Prior"
+        prior_folder = r"Local\BMS\Prior"
         prior_files  = os.listdir(prior_folder)
         self.valid_priors = [i for i in prior_files if ".nv{0}.".format(self.ninputs) in i]
         self.chosen_prior = self.valid_priors[-1]
