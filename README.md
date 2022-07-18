@@ -8,26 +8,31 @@ PROJECT
 |   README.md
 |   .gitignore
 |
-|---src
+|---scripts
 |   |   main.py
+|
+|---utils
 |   |   utils.py
+|   |   config.py
+|   |   __init__.py
 |
-|---BMS
-|   |   All the BMS files
-|
-|---Data
-|   |---ExperimentName01
-|       |   data.xlsx  
-|   |---ExperimentName02
-|       |   data.xlsx   
-|   |---ExperimentName03
-|       |   data.xlsx  
-|   |---... 
-|
-|---Results
+|---Local
+|   |---BMS
+|   |   |   All the BMS files
+|   |
+|   |---Data
+|   |   |---ExperimentName01
+|   |       |   data.xlsx  
+|   |   |---ExperimentName02
+|   |       |   data.xlsx   
+|   |   |---ExperimentName03
+|   |       |   data.xlsx  
+|   |   |---... 
+|   |
+|   |---Results
 ```
 
-This ensures that everything is imported correctly. Otherwise, you have to change import paths in both ```utils.py``` and ```main.py```
+This ensures that everything is imported correctly. Otherwise, you have to change import paths in both ```utils.py``` and ```main.py```. The ```config.py``` file indicates the path of the BMS files.
 
 
 # Structure of the `data.xls` files
