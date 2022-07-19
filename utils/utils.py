@@ -27,7 +27,19 @@ class ScalingError(Exception):
 class BMS_instance:
     def __init__(self, experiment: str = None, noutputs:int = 1, chosen_output:int = 1, scaling = None):
         """
-        Load the data of an experiment
+        Initialize the instance. 
+        
+        Inputs:
+            - experiment    : String indicating the name of the folder where the data.xlsx file is.
+            - noutputs      : Integer indicating the number of outputs in this experiment.
+            - chosen_output : Integer indicating the chosen output for this BMS instance.
+            - scaling       : String with the options "inputs", "outputs", and "both", which indicates to which
+                              section of the data a z-score scaling should be performed. 
+        
+        Called methods:
+            - init_prior()
+            - init_tree(scaling, chosen_output)
+
         """
         self.experiment = experiment
         folder_data = r"Local\Data"
@@ -42,10 +54,20 @@ class BMS_instance:
         
     @staticmethod
     def load(load):
+        """
+        Static method to load pickled saved models. 
+        
+        Inputs:
+            - load: Raw string that indicates the full path to the pickle (.pkl) file.
+        """
         with open(load, "rb") as input_file:
                 return pickle.load(input_file)
         
     def init_prior(self):
+        """
+        Initialize the prior considered for the BMS. It chooses the last element of a valid list of priors regarding
+        the dimensionality of the input.
+        """
         prior_folder = r"Local\BMS\Prior"
         prior_files  = os.listdir(prior_folder)
         self.valid_priors = [i for i in prior_files if ".nv{0}.".format(self.ninputs) in i]
@@ -56,6 +78,14 @@ class BMS_instance:
         self.prior_par = read_prior_par(prior_folder + "\\" + self.chosen_prior)
     
     def init_tree(self, chosen_output = 1, scaling = None):
+        """
+        Initializes the parallel BMS tree for the chosen output. Also applies z-score scaling if the option is selected.
+        
+        Inputs:
+            - chosen_output : Integer indicating the chosen output for this BMS instance.
+            - scaling       : String with the options "inputs", "outputs", and "both", which indicates to which
+                              section of the data a z-score scaling should be performed.
+        """
         self.x_test  = self.test.iloc[:,:self.ninputs].copy()
         self.y_test  = self.test.iloc[:, self.ninputs + chosen_output - 1].copy()
         self.y_test  = pd.Series(list(self.y_test))
@@ -96,6 +126,13 @@ class BMS_instance:
         )
         
     def run_BMS(self, mcmcsteps = 232, save_distance = 100):
+        """
+        Runs the BMS for a number of mcmcsteps. Also saves the resultant model in a .pkl each save_distance points.
+        
+        Inputs:
+            - mcmcsteps     : Integer that indicates the number of markov chain monte carlo steps to perform.
+            - save_distance : Integer that indicates how many steps occur between saving an instance of the model to a pkl. file.
+        """
         self.description_lengths, self.mdl, self.mdl_model = [], np.inf, None
         pbar = tqdm(range(mcmcsteps), desc = "Running BMS: ")
         result_folder = r"Local\Results"
@@ -119,6 +156,9 @@ class BMS_instance:
                     pickle.dump(self, outp, pickle.HIGHEST_PROTOCOL)
                     
     def plot_dlength(self):
+        """
+        Plot the description length graph, as well as information about the best found model.
+        """
         ## WE check some stats:
         print('Best model:\t', self.mdl_model)
         print('Desc. length:\t', self.mdl)
@@ -135,6 +175,9 @@ class BMS_instance:
         plt.show()
         
     def plot_rsquare(self):
+        """
+        Plot the predicted vs. real graph, as well as information about the best found model.
+        """
         print('Best model:\t', self.mdl_model)
         print('Desc. length:\t', self.mdl)
         print("BIC:\t", self.mdl_model.bic)
