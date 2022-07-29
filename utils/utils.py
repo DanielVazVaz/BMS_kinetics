@@ -25,7 +25,7 @@ class ScalingError(Exception):
     pass
 
 class BMS_instance:
-    def __init__(self, experiment: str = None, noutputs:int = 1, chosen_output:int = 1, scaling = None):
+    def __init__(self, experiment: str = None, noutputs:int = 1, chosen_output:int = 1, scaling = None, data_path = r"data.xslx"):
         """
         Initialize the instance. 
         
@@ -35,6 +35,7 @@ class BMS_instance:
             - chosen_output : Integer indicating the chosen output for this BMS instance.
             - scaling       : String with the options "inputs", "outputs", and "both", which indicates to which
                               section of the data a z-score scaling should be performed. 
+            - data_path:    : Path to the .xslx file where the training and test data is.
         
         Called methods:
             - init_prior()
@@ -42,8 +43,7 @@ class BMS_instance:
 
         """
         self.experiment = experiment
-        folder_data = r"Local\Data"
-        file_data = folder_data + "\\" + experiment + "\\data.xlsx"
+        file_data = data_path
         self.train = pd.read_excel(file_data, sheet_name="train", index_col = 0)
         self.test  = pd.read_excel(file_data, sheet_name="test", index_col = 0)
         self.noutputs = noutputs
@@ -68,7 +68,7 @@ class BMS_instance:
         Initialize the prior considered for the BMS. It chooses the last element of a valid list of priors regarding
         the dimensionality of the input.
         """
-        prior_folder = r"Local\BMS\Prior"
+        prior_folder = BMS_FOLDER + "\\" + "Prior"
         prior_files  = os.listdir(prior_folder)
         self.valid_priors = [i for i in prior_files if ".nv{0}.".format(self.ninputs) in i]
         self.chosen_prior = self.valid_priors[-1]
@@ -125,17 +125,17 @@ class BMS_instance:
             prior_par=self.prior_par,
         )
         
-    def run_BMS(self, mcmcsteps = 232, save_distance = 100):
+    def run_BMS(self, mcmcsteps = 232, save_distance = 100, save_folder_path = r"."):
         """
         Runs the BMS for a number of mcmcsteps. Also saves the resultant model in a .pkl each save_distance points.
         
         Inputs:
-            - mcmcsteps     : Integer that indicates the number of markov chain monte carlo steps to perform.
-            - save_distance : Integer that indicates how many steps occur between saving an instance of the model to a pkl. file.
+            - mcmcsteps         : Integer that indicates the number of markov chain monte carlo steps to perform.
+            - save_distance     : Integer that indicates how many steps occur between saving an instance of the model to a pkl. file.
+            - save_folder_path  : Path to the folder where the .pkl will be saved
         """
         self.description_lengths, self.mdl, self.mdl_model = [], np.inf, None
         pbar = tqdm(range(mcmcsteps), desc = "Running BMS: ")
-        result_folder = r"Local\Results"
         for i in pbar:
             pbar.set_description("Running BMS: [{0}/{1}]: ".format(i+1, mcmcsteps))
             # MCMC update
@@ -152,7 +152,7 @@ class BMS_instance:
             #f.description = 'Run:{0}'.format(i)
             # Save pickle
             if (i+1)%save_distance == 0:
-                with open(result_folder + "\\" + r'{2}_Out{3}_Scale{0}_{1}.pkl'.format(self.scaling, (i+1), self.experiment, self.chosen_output), 'wb') as outp:
+                with open(save_folder_path + "\\" + r'{2}_Out{3}_Scale{0}_{1}.pkl'.format(self.scaling, (i+1), self.experiment, self.chosen_output), 'wb') as outp:
                     pickle.dump(self, outp, pickle.HIGHEST_PROTOCOL)
                     
     def plot_dlength(self):
