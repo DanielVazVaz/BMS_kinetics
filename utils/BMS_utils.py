@@ -1,16 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import sys
 import os
 import re
-from .config import BMS_FOLDER
-sys.path.append(BMS_FOLDER)
-sys.path.append(BMS_FOLDER + "\\" + "Prior")
+#BMS_FOLDER = r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\BMS"
+#sys.path.append(BMS_FOLDER)
+#sys.path.append(BMS_FOLDER + "\\" + "Prior")
 import pandas as pd
 import numpy as np
 from copy import deepcopy
-import mcmc
 import parallel
 from fit_prior import read_prior_par
 import warnings
@@ -19,13 +17,35 @@ from tqdm.auto import tqdm
 import pickle
 import matplotlib.pyplot as plt
 
+OPS = {
+    'sin': 1,
+    'cos': 1,
+    'tan': 1,
+    'exp': 1,
+    'log': 1,
+    'sinh' : 1,
+    'cosh' : 1,
+    'tanh' : 1,
+    'pow2' : 1,
+    'pow3' : 1,
+    'abs'  : 1,
+    'sqrt' : 1,
+    'fac' : 1,
+    '-' : 1,
+    '+' : 2,
+    '*' : 2,
+    '/' : 2,
+    '**' : 2,
+}
+
 class PriorError(Exception):
     pass
 class ScalingError(Exception):
     pass
 
 class BMS_instance:
-    def __init__(self, experiment: str = None, noutputs:int = 1, chosen_output:int = 1, scaling = None, data_path = r"data.xslx"):
+    def __init__(self, experiment: str = None, noutputs:int = 1, chosen_output:int = 1, scaling = None, data_path = r"data.xslx", ops = OPS,
+                 prior_folder = r".", npar = None):
         """
         Initialize the instance. 
         
@@ -44,11 +64,13 @@ class BMS_instance:
         """
         self.experiment = experiment
         file_data = data_path
+        self.prior_folder = prior_folder
+        self.ops = ops
         self.train = pd.read_excel(file_data, sheet_name="train", index_col = 0)
         self.test  = pd.read_excel(file_data, sheet_name="test", index_col = 0)
         self.noutputs = noutputs
         self.ninputs  = self.train.shape[1] - self.noutputs
-        self.init_prior()
+        self.init_prior(npar)
         self.init_tree(scaling = scaling, chosen_output=chosen_output)
         self.chosen_output = chosen_output
         
@@ -63,15 +85,18 @@ class BMS_instance:
         with open(load, "rb") as input_file:
                 return pickle.load(input_file)
         
-    def init_prior(self):
+    def init_prior(self, npar):
         """
         Initialize the prior considered for the BMS. It chooses the last element of a valid list of priors regarding
         the dimensionality of the input.
         """
-        prior_folder = BMS_FOLDER + "\\" + "Prior"
+        prior_folder = self.prior_folder
         prior_files  = os.listdir(prior_folder)
         self.valid_priors = [i for i in prior_files if ".nv{0}.".format(self.ninputs) in i]
-        self.chosen_prior = self.valid_priors[-1]
+        if npar:
+            self.chosen_prior = [i for i in self.valid_priors if ".np{0}.".format(npar) in i][-1]
+        else:
+            self.chosen_prior = self.valid_priors[-1]
         if not self.chosen_prior:
             raise PriorError
         self.npar = int(re.search(r"np(\d+)", self.chosen_prior).group(1))
@@ -87,10 +112,12 @@ class BMS_instance:
                               section of the data a z-score scaling should be performed.
         """
         self.x_test  = self.test.iloc[:,:self.ninputs].copy()
+        self.x_test.reset_index(inplace=True, drop = True)
         self.y_test  = self.test.iloc[:, self.ninputs + chosen_output - 1].copy()
         self.y_test  = pd.Series(list(self.y_test))
         self.x_test.columns = ["x" + str(i+1) for i in range(len(self.x_test.columns))]
         self.x  = self.train.iloc[:,:self.ninputs].copy()
+        self.x.reset_index(inplace=True, drop = True)
         self.y  = self.train.iloc[:, self.ninputs + chosen_output - 1].copy()
         self.y  = pd.Series(list(self.y))
         self.x.columns = ["x" + str(i+1) for i in range(len(self.x.columns))]
@@ -123,9 +150,10 @@ class BMS_instance:
             parameters=['a%d' % i for i in range(self.npar)],
             x=self.x, y=self.y,
             prior_par=self.prior_par,
+            ops = self.ops
         )
         
-    def run_BMS(self, mcmcsteps = 232, save_distance = 100, save_folder_path = r"."):
+    def run_BMS(self, mcmcsteps = 232, save_distance = None, save_folder_path = r"."):
         """
         Runs the BMS for a number of mcmcsteps. Also saves the resultant model in a .pkl each save_distance points.
         
@@ -151,9 +179,10 @@ class BMS_instance:
             #f.value += 1
             #f.description = 'Run:{0}'.format(i)
             # Save pickle
-            if (i+1)%save_distance == 0:
-                with open(save_folder_path + "\\" + r'{2}_Out{3}_Scale{0}_{1}.pkl'.format(self.scaling, (i+1), self.experiment, self.chosen_output), 'wb') as outp:
-                    pickle.dump(self, outp, pickle.HIGHEST_PROTOCOL)
+            if save_distance:
+                if (i+1)%save_distance == 0:
+                    with open(save_folder_path + "\\" + r'{2}_Out{3}_Scale{0}_{1}.pkl'.format(self.scaling, (i+1), self.experiment, self.chosen_output), 'wb') as outp:
+                        pickle.dump(self, outp, pickle.HIGHEST_PROTOCOL)
                     
     def plot_dlength(self):
         """
@@ -174,14 +203,15 @@ class BMS_instance:
         plt.title('MDL model: $%s$' % self.mdl_model.latex())
         plt.show()
         
-    def plot_rsquare(self):
+    def calculate_rsquare(self, plot = False):
         """
-        Plot the predicted vs. real graph, as well as information about the best found model.
+        Calculate the predicted vs. real graph, as well as information about the best found model.
         """
-        print('Best model:\t', self.mdl_model)
-        print('Desc. length:\t', self.mdl)
-        print("BIC:\t", self.mdl_model.bic)
-        print("Par:\t", self.mdl_model.par_values["d0"])
+        if plot:
+            print('Best model:\t', self.mdl_model)
+            print('Desc. length:\t', self.mdl)
+            print("BIC:\t", self.mdl_model.bic)
+            print("Par:\t", self.mdl_model.par_values["d0"])
         
         predicted_train = self.mdl_model.predict(self.x)
         predicted_test  = self.mdl_model.predict(self.x_test)
@@ -193,24 +223,36 @@ class BMS_instance:
         R2_test   = 1 - SSR_test/SST_test
         MSE_train = ((self.y - predicted_train)**2).sum()/self.y.shape[0]
         MSE_test  = ((self.y_test - predicted_test)**2).sum()/self.y_test.shape[0]
-        plt.figure(figsize=(6, 4), dpi = 200)
-        ax = plt.gca()
-        plt.scatter(predicted_train, self.y, color = "blue", label = "training")
-        plt.scatter(predicted_test, self.y_test, color = "red", label = "test")
-        lims = [np.min([ax.get_xlim(), ax.get_ylim()]),  # min of both axes
-                np.max([ax.get_xlim(), ax.get_ylim()]),  # max of both axes
-                ]
-        ax.plot(lims, lims, 'k-', alpha=0.75, zorder=0)
-        ax.set_xlim(lims)
-        ax.set_ylim(lims)
-        plt.xlabel('MDL model predictions', fontsize=14)
-        plt.ylabel('Actual values', fontsize=14)
-        plt.title(f"$R^2_{{train}} = {R2_train:.4f}\qquad R^2_{{test}} = {R2_test:.4f}$\n$MSE_{{train}} = {MSE_train:.3e} \qquad  MSE_{{test}} = {MSE_test:.3e}$")
-        plt.legend(loc = "best")
-        plt.show()
-        
+        if plot:
+            plt.figure(figsize=(6, 4), dpi = 200)
+            ax = plt.gca()
+            plt.scatter(predicted_train, self.y, color = "blue", label = "training")
+            plt.scatter(predicted_test, self.y_test, color = "red", label = "test")
+            lims = [np.min([ax.get_xlim(), ax.get_ylim()]),  # min of both axes
+                    np.max([ax.get_xlim(), ax.get_ylim()]),  # max of both axes
+                    ]
+            ax.plot(lims, lims, 'k-', alpha=0.75, zorder=0)
+            ax.set_xlim(lims)
+            ax.set_ylim(lims)
+            plt.xlabel('MDL model predictions', fontsize=14)
+            plt.ylabel('Actual values', fontsize=14)
+            plt.title(f"$R^2_{{train}} = {R2_train:.4f}\qquad R^2_{{test}} = {R2_test:.4f}$\n$MSE_{{train}} = {MSE_train:.3e} \qquad  MSE_{{test}} = {MSE_test:.3e}$")
+            plt.legend(loc = "best")
+            plt.show()
+        error_dict = {"R2_train": R2_train, "R2_test": R2_test, "MSE_train": MSE_train,
+                      "MSE_test": MSE_test}
+        return error_dict
+    
+    def save_txt(self, file_path: str):
+        """Saves the BMS equation in a .txt file, as well as the value of the parameters
+
+        Args:
+            file_path (str): Path to the txt file
+        """
+        with open(file_path, "w") as f:
+            f.writelines([str(self.mdl_model), str(self.mdl_model.par_values["d0"])] )
             
-            
+
 if __name__ == "__main__":
     a = BMS_instance("Haber_Bosch")     
     a.run_BMS(300)
