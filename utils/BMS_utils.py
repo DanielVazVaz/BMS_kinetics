@@ -44,24 +44,20 @@ class ScalingError(Exception):
     pass
 
 class BMS_instance:
-    def __init__(self, experiment: str = None, noutputs:int = 1, chosen_output:int = 1, scaling = None, data_path = r"data.xslx", ops = OPS,
-                 prior_folder = r".", npar = None):
-        """
-        Initialize the instance. 
-        
-        Inputs:
-            - experiment    : String indicating the name of the folder where the data.xlsx file is.
-            - noutputs      : Integer indicating the number of outputs in this experiment.
-            - chosen_output : Integer indicating the chosen output for this BMS instance.
-            - scaling       : String with the options "inputs", "outputs", and "both", which indicates to which
-                              section of the data a z-score scaling should be performed. 
-            - data_path:    : Path to the .xslx file where the training and test data is.
-        
-        Called methods:
-            - init_prior()
-            - init_tree(scaling, chosen_output)
+    def __init__(self, experiment: str = None, noutputs:int = 1, chosen_output:int = 1, scaling:str = None, data_path:str = r"data.xslx", ops:dict = OPS,
+                 prior_folder:str = r".", npar:int = None):
+        """Initialize an instance of hte BMS class
 
-        """
+        Args:
+            experiment (str, optional): Name of the experiment if needed. Defaults to None.
+            noutputs (int, optional): Number of outputs in the data. Defaults to 1.
+            chosen_output (int, optional): Position of the chosen output, from 1 to noutputs. Defaults to 1.
+            scaling (str, optional): Perform zscore scaling for inputs, outputs, both, or None. Defaults to None.
+            data_path (str, optional): Path to the xlsx file. Defaults to r"data.xslx".
+            ops (dict, optional): Dictionary with the valid operations and the children of each operation. Defaults to OPS.
+            prior_folder (str, optional): Path to the prior folder. Defaults to r".".
+            npar (int, optional): Number of parameters to consider. Defaults to None.
+        """        
         self.experiment = experiment
         file_data = data_path
         self.prior_folder = prior_folder
@@ -76,20 +72,27 @@ class BMS_instance:
         
     @staticmethod
     def load(load):
-        """
-        Static method to load pickled saved models. 
-        
-        Inputs:
-            - load: Raw string that indicates the full path to the pickle (.pkl) file.
-        """
+        """Static method to load pickled saved models.
+
+        Args:
+            load (str): Raw string that indicates the full path to the pickle (.pkl) file.
+
+        Returns:
+            BMS_instance: Loaded BMS instance
+        """        
         with open(load, "rb") as input_file:
                 return pickle.load(input_file)
         
-    def init_prior(self, npar):
-        """
-        Initialize the prior considered for the BMS. It chooses the last element of a valid list of priors regarding
-        the dimensionality of the input.
-        """
+    def init_prior(self, npar:int):
+        """Initialize the prior considered for the BMS. It chooses the last element of a valid list of priors regarding
+        the dimensionality of the input if no integer is passed.
+
+        Args:
+            npar (int): Numnber of parameters to consider
+
+        Raises:
+            PriorError: In case there is no priors available
+        """    
         prior_folder = self.prior_folder
         prior_files  = os.listdir(prior_folder)
         self.valid_priors = [i for i in prior_files if ".nv{0}.".format(self.ninputs) in i]
@@ -102,15 +105,16 @@ class BMS_instance:
         self.npar = int(re.search(r"np(\d+)", self.chosen_prior).group(1))
         self.prior_par = read_prior_par(prior_folder + "\\" + self.chosen_prior)
     
-    def init_tree(self, chosen_output = 1, scaling = None):
-        """
-        Initializes the parallel BMS tree for the chosen output. Also applies z-score scaling if the option is selected.
-        
-        Inputs:
-            - chosen_output : Integer indicating the chosen output for this BMS instance.
-            - scaling       : String with the options "inputs", "outputs", and "both", which indicates to which
-                              section of the data a z-score scaling should be performed.
-        """
+    def init_tree(self, chosen_output:int = 1, scaling:str = None):
+        """Initializes the parallel BMS tree for the chosen output. Also applies z-score scaling if the option is selected.
+
+        Args:
+            chosen_output (int, optional): Position of the chosen output, from 1 to noutputs. Defaults to 1.
+            scaling (str, optional): Perform zscore scaling for inputs, outputs, both, or None. Defaults to None.
+
+        Raises:
+            ScalingError: Wrong input to scaling. Options are 'inputs', 'outputs', 'both', and None.
+        """        
         self.x_test  = self.test.iloc[:,:self.ninputs].copy()
         self.x_test.reset_index(inplace=True, drop = True)
         self.y_test  = self.test.iloc[:, self.ninputs + chosen_output - 1].copy()
@@ -120,6 +124,7 @@ class BMS_instance:
         self.x.reset_index(inplace=True, drop = True)
         self.y  = self.train.iloc[:, self.ninputs + chosen_output - 1].copy()
         self.y  = pd.Series(list(self.y))
+        self.original_columns = self.x.columns
         self.x.columns = ["x" + str(i+1) for i in range(len(self.x.columns))]
         self.scaling = scaling
         x_scaling_mean = self.x.mean()
@@ -153,14 +158,13 @@ class BMS_instance:
             ops = self.ops
         )
         
-    def run_BMS(self, mcmcsteps = 232, save_distance = None, save_folder_path = r"."):
-        """
-        Runs the BMS for a number of mcmcsteps. Also saves the resultant model in a .pkl each save_distance points.
-        
-        Inputs:
-            - mcmcsteps         : Integer that indicates the number of markov chain monte carlo steps to perform.
-            - save_distance     : Integer that indicates how many steps occur between saving an instance of the model to a pkl. file.
-            - save_folder_path  : Path to the folder where the .pkl will be saved
+    def run_BMS(self, mcmcsteps:int = 232, save_distance:int = None, save_folder_path:str = r".\saved_model.pkl"):
+        """Runs the BMS for a number of mcmcsteps. Also saves the resultant model in a .pkl each save_distance points.
+
+        Args:
+            mcmcsteps (int, optional): Number of mcmcsteps to run. Defaults to 232.
+            save_distance (int, optional): Number of mcmcsteps before saving a .pkl file. Defaults to None.
+            save_folder_path (str, optional): Path to the saved .pkl file. Defaults to r".\saved_model.pkl".
         """
         self.description_lengths, self.mdl, self.mdl_model = [], np.inf, None
         pbar = tqdm(range(mcmcsteps), desc = "Running BMS: ")
@@ -203,10 +207,15 @@ class BMS_instance:
         plt.title('MDL model: $%s$' % self.mdl_model.latex())
         plt.show()
         
-    def calculate_rsquare(self, plot = False):
-        """
-        Calculate the predicted vs. real graph, as well as information about the best found model.
-        """
+    def calculate_rsquare(self, plot:bool = False) -> dict:
+        """Calculate the predicted vs. real graph, as well as information about the best found model.
+
+        Args:
+            plot (bool, optional): Indicates if the plot of predicted vs calculated will be displayed. Defaults to False.
+
+        Returns:
+            dict: Information about the error metrics
+        """        
         if plot:
             print('Best model:\t', self.mdl_model)
             print('Desc. length:\t', self.mdl)
