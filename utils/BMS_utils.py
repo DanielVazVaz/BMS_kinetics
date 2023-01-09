@@ -16,6 +16,7 @@ warnings.filterwarnings('ignore')
 from tqdm.auto import tqdm
 import pickle
 import matplotlib.pyplot as plt
+from time import time
 
 OPS = {
     'sin': 1,
@@ -157,6 +158,7 @@ class BMS_instance:
             prior_par=self.prior_par,
             ops = self.ops
         )
+        self.training_time = 0
         
     def run_BMS(self, mcmcsteps:int = 232, save_distance:int = None, save_folder_path:str = r".\saved_model.pkl"):
         """Runs the BMS for a number of mcmcsteps. Also saves the resultant model in a .pkl each save_distance points.
@@ -166,6 +168,7 @@ class BMS_instance:
             save_distance (int, optional): Number of mcmcsteps before saving a .pkl file. Defaults to None.
             save_folder_path (str, optional): Path to the saved .pkl file. Defaults to r".\saved_model.pkl".
         """
+        start_time = time()
         self.description_lengths, self.mdl, self.mdl_model = [], np.inf, None
         pbar = tqdm(range(mcmcsteps), desc = "Running BMS: ")
         for i in pbar:
@@ -187,6 +190,8 @@ class BMS_instance:
                 if (i+1)%save_distance == 0:
                     with open(save_folder_path + "\\" + r'{2}_Out{3}_Scale{0}_{1}.pkl'.format(self.scaling, (i+1), self.experiment, self.chosen_output), 'wb') as outp:
                         pickle.dump(self, outp, pickle.HIGHEST_PROTOCOL)
+        end_time = time()
+        self.training_time += (end_time - start_time)/60 # Mins
                     
     def plot_dlength(self):
         """
