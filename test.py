@@ -2,93 +2,14 @@ import sys
 BMS_FOLDER = r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\BMS"
 sys.path.append(BMS_FOLDER)
 sys.path.append(BMS_FOLDER + "\\" + "Prior")
-from utils.kinetic_utils import PropeneAmmoxidation
+from utils.kinetic_utils import PropeneAmmoxidation, MethanolProduction
+from metadata_file import (OPS_mono, OPS_state, MeOH_metadata_nonnoisy_50, 
+                           MeOHnn50_BMS_kwargs_mono,MeOHnn50_BMS_kwargs_state)
 import numpy as np
 import os
 
-OPS_mono = {
-    'sin': 1,
-    'cos': 1,
-    'tan': 1,
-    'exp': 1,
-    'log': 1,
-    'sinh' : 1,
-    'cosh' : 1,
-    'tanh' : 1,
-    'pow2' : 1,
-    'pow3' : 1,
-#    'abs'  : 1,
-    'sqrt' : 1,
-#    'fac' : 1,
-    '-' : 1,
-    '+' : 2,
-    '*' : 2,
-    '/' : 2,
-    '**' : 2,
-}
-
-OPS_state = {
-    'exp': 1,
-    'pow2' : 1,
-    'pow3' : 1,
-    'sqrt' : 1,
-    '-' : 1,
-    '+' : 2,
-    '*' : 2,
-    '/' : 2,
-    '**' : 2,
-}
-
 # Important metadata
-metadata = {
-            "Local_path": r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\Results",
-            "Exp_name": r"PropAmox50points",
-            "Initial_p": np.array([8.0, 0, 0, 0, 0, 0, 8.0, 16.0, 10.5]),
-            "Exp_T": np.linspace(607, 773, 10),
-            "W_values": np.linspace(0, 8, 50),
-            "chemicals": ["C3H6", "N2", "ACN", "NBP", "ACO", "OBP", "NH3", "O2", "H2O"]
-            }
 
-metadata_noisy = {
-            "Local_path": r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\Results",
-            "Exp_name": r"PropAmox50pointsNoisy",
-            "Initial_p": np.array([8.0, 0, 0, 0, 0, 0, 8.0, 16.0, 10.5]),
-            "Exp_T": np.linspace(607, 773, 10),
-            "W_values": np.linspace(0, 8, 50),
-            "chemicals": ["C3H6", "N2", "ACN", "NBP", "ACO", "OBP", "NH3", "O2", "H2O"]
-            }
-
-metadata_noisy_less = {
-            "Local_path": r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\Results",
-            "Exp_name": r"PropAmox25pointsNoisy",
-            "Initial_p": np.array([8.0, 0, 0, 0, 0, 0, 8.0, 16.0, 10.5]),
-            "Exp_T": np.linspace(607, 773, 10),
-            "W_values": np.linspace(0, 8, 25),
-            "chemicals": ["C3H6", "N2", "ACN", "NBP", "ACO", "OBP", "NH3", "O2", "H2O"]
-            }
-
-BMS_kwargs_mono =   {
-                    "prior_folder": r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\BMS\Prior",
-                    "chosen_output": 1,
-                    "scaling": None,
-                    "npar": 4,
-                    "ops": OPS_mono
-                    }
-
-BMS_kwargs_state =   {
-                    "prior_folder": r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\BMS\Prior",
-                    "noutputs": 2,
-                    "scaling": None,
-                    "npar": 12,
-                    "ops": OPS_state
-                    }
-
-test_conditions_dic = {"T_experiments": np.linspace(613, 763, 10),
-                       "W_values": np.linspace(0,8,50),
-                       "chemicals": ["ACN", "N2", "ACO"],
-                       "integrator": "LSODA",
-                       "p0": np.array([8.0, 0, 0, 0, 0, 0, 8.0, 16.0, 10.5]),
-                        }
 
 #! Try one. There are some weird things in the integration
 # perform_exp = PropeneAmmoxidation(os.path.join(metadata["Local_path"], metadata["Exp_name"]))
@@ -130,5 +51,28 @@ test_conditions_dic = {"T_experiments": np.linspace(613, 763, 10),
 #                      W_values=np.linspace(0,10,500), integrator = "LSODA")
 
 #! Various test
-perform_exp = PropeneAmmoxidation(os.path.join(metadata["Local_path"], metadata["Exp_name"]), noise=False)
-perform_exp.calculate_test_experiment(BMS_models = "BMS_results2.xlsx", **test_conditions_dic)
+#perform_exp = PropeneAmmoxidation(os.path.join(metadata["Local_path"], metadata["Exp_name"]), noise=False)
+#perform_exp.calculate_test_experiment(BMS_models = "BMS_results2.xlsx", **test_conditions_dic)
+
+#!Methanol stuff
+MeOH50nn = MethanolProduction(os.path.join(MeOH_metadata_nonnoisy_50["Local_path"], MeOH_metadata_nonnoisy_50["Exp_name"]))
+# MeOH50nn.data_generation(initial_x=MeOH_metadata_nonnoisy_50["Initial_x"], T_experiments=MeOH_metadata_nonnoisy_50["Exp_T"],
+#                             W_values=MeOH_metadata_nonnoisy_50["W_values"], integrator ="LSODA")
+# MeOH50nn.plot_experiment(MeOH50nn.data_exp.loc["Exp5"], ["CO", "CO2", "H2O", "CH3OH"])
+# MeOH50nn.profile_BMS_generation(chemicals =["CO", "CH3OH"], BMS_kwargs = MeOHnn50_BMS_kwargs_mono)
+# MeOH50nn.data_state_BMS_generation(data = r"Local\Results\MeOH50points\data\nonnoisy\data.xlsx",
+#                                   bms_data_path=r"Local\Results\MeOH50points\BMS_conc_profiles\nonnoisy\BMS_results.xlsx",
+#                                   chemicals = ["CO", "CH3OH"])
+# MeOH50nn.run_state_BMS(data_folder = r"C:\Users\dvazquez\Daniel\Articulos\Articulo_BMS_cineticas\Code\Local\Results\MeOH50points\BMS_state_space\nonnoisy",
+#                        chemicals = ["CO", "CH3OH"], BMS_kwargs=MeOHnn50_BMS_kwargs_state)
+MeOH50nn.calculate_test_experiment("BMS_results.xlsx", chemicals = ["CO", "CH3OH"], T_experiments=MeOH_metadata_nonnoisy_50["Exp_T"][:1], 
+                                   W_values = MeOH_metadata_nonnoisy_50["W_values"], x0 = MeOH_metadata_nonnoisy_50["Initial_x"])
+
+# MeOH50n = MethanolProduction(os.path.join(MeOH_metadata_nonnoisy_50["Local_path"],
+#                                           MeOH_metadata_nonnoisy_50["Exp_name"]),
+#                              noise = True)
+# MeOH50n.data_generation(initial_x=MeOH_metadata_nonnoisy_50["Initial_x"], T_experiments=MeOH_metadata_nonnoisy_50["Exp_T"],
+#                             W_values=MeOH_metadata_nonnoisy_50["W_values"], integrator ="LSODA")
+# MeOH50n.profile_BMS_generation(chemicals =["CO", "CH3OH"], BMS_kwargs = MeOHnn50_BMS_kwargs_mono)
+# MeOH50n.data_state_BMS_generation(chemicals = ["CO", "CH3OH"])
+# MeOH50n.run_state_BMS(chemicals = ["CO", "CH3OH"], BMS_kwargs=MeOHnn50_BMS_kwargs_state)

@@ -395,7 +395,7 @@ class PropeneAmmoxidation:
         
     @staticmethod 
     def ode_function(W, F, P: float, T:float, Finert: float, BMS_eq = None):
-        F[F < 0] = 0   # Check to avoid negative things
+        F[F < 0] = 1e-17   # Check to avoid negative things
         return PropeneAmmoxidation.propene_ammoxidation_kinetic(F, P, T, Finert, BMS_eq)[0]
         
     @staticmethod
@@ -464,12 +464,442 @@ class PropeneAmmoxidation:
         plt.ylabel("F [$mol/s$]")
         plt.legend(loc = "best")
         plt.show()
-        
 
+class MethanolProduction:
+    """Dummy class to maintain these functions together
+    """
+    def __init__(self, dump_folder:str, noise = False):
+        self.comp_order = ["CO", "H2O", "CH3OH", "H2", "CO2", "Ar"]
+        self.comp_PM    = np.array([28, 18, 32, 2, 44, 40]) #kg/kgmol
+        self.dump_folder = dump_folder
+        self.noise = noise
+    
+    def data_generation(self, initial_x, T_experiments, W_values = None, file_name = r"data.xlsx", integrator = "LSODA"):
+        """Generates the data
+        """
+        if file_name[-5:] != ".xlsx":
+            file_name += ".xlsx"
+        # Create the folder to hold the data in case it does not exist
+        data_folder = os.path.join(self.dump_folder, "data")
+        if self.noise:
+            folder_to_save = os.path.join(data_folder, "noisy")
+        else:
+            folder_to_save = os.path.join(data_folder, "nonnoisy")
+        os.makedirs(folder_to_save, exist_ok=True)
         
-            
+        # Calculate the initial flow rate
+        m0 = 10e-5                                  # kg/s
+        x0 = initial_x                              # % mole
+        PM_mixture = (x0/100*self.comp_PM).sum()    # kg/kgmol
+        n0 = m0/PM_mixture                          # kgmol/s
+        F0 = n0*1000*x0/100                         # mol/s
+        P0 = 50                                     # bar
+        
+        labels = ["$CO$", "$H_2O$", "$CH_3OH$", "$H_2$", "$CO_2$", "$Ar$"]
+        df_dic = {}
+        self.solver_results = {}
+        for n,T in enumerate(T_experiments):
+            profile, W, partial, self.solver_results[f"Exp{n+1}"] = MethanolProduction.generate_experiment(F0, P = P0, T = T, W_values=W_values, integrator=integrator)
+            df_dic[T] = MethanolProduction.generate_df(labels, T, partial, W, profile)
+            multi_index = pd.MultiIndex.from_tuples(product([f"Exp{n+1}"], df_dic[T].index))
+            df_dic[T].set_index(multi_index, inplace=True)
+        df_complete = pd.concat([df_dic[i] for i in df_dic])
+        if self.noise:
+            chemicals = self.comp_order
+            chemical_flows = ["F" + i + " [mol/s]" for i in chemicals]
+            P_flows = ["p" + i + " [bar]" for i in chemicals]
+            np.random.seed(1)
+            noise_value = np.random.normal(loc = 1, scale = 0.005, size = df_complete.loc[:, chemical_flows].shape)
+            np.random.seed(None)
+            df_complete.loc[:, chemical_flows] = df_complete.loc[:, chemical_flows]*noise_value
+            df_complete.loc[:, P_flows] = df_complete.loc[:, P_flows]*noise_value
+        self.data_exp = df_complete
+        df_complete.to_excel(os.path.join(folder_to_save, file_name))
+        
+    def profile_BMS_generation(self, data = None, chemicals = None, BMS_kwargs = None):
+        """Generates the monodimensional BMS that will afterwards be differentiated.
 
+        Args:
+            data (str, optional): Data of the experiments. Defaults to None.
+            chemicals (list, optional): List of chemicals to do the BMS. For the methanol case, it is enough with the actual methanol, and the CO, to characterize both reactions.
+            max_conv (float, optional): Maximum conversion allowed of C3H6. Defaults to 100.
+            BMS_kwargs (dict, optional): Arguments to the BMS instance. Defaults to None.
+        """        
+        if not data:
+            data = self.data_exp
+        else:
+            data = pd.read_excel(data, index_col = [0,1]) 
+        
+        # Create the folder to hold the BMS excel equations in case it does not exist
+        data_folder = os.path.join(self.dump_folder, "BMS_conc_profiles")
+        if self.noise:
+            folder_to_save = os.path.join(data_folder, "noisy")
+        else:
+            folder_to_save = os.path.join(data_folder, "nonnoisy")
+        os.makedirs(folder_to_save, exist_ok=True)
+        
+                # Filter regarding the conversion
+        self.data_filtered = data
+        
+        # Check experiments
+        exp_data_folder = folder_to_save
+        os.makedirs(exp_data_folder, exist_ok=True)
+        BMS_instances = {}
+        for experiment in self.data_filtered.index.get_level_values(0).unique():
+            print(f"[+] Experiment: {experiment}")
+            exp_data = self.data_filtered.loc[experiment]
+            for chemical in chemicals:
+                chemical_flow = "F" + chemical + " [mol/s]"
+                exp_df = exp_data[["W [kg]", chemical_flow]]
+                exp_file_name = f"{experiment.replace(' ','')}_{chemical}.xlsx"
+                data_BMS_path = os.path.join(exp_data_folder, exp_file_name)
+                with pd.ExcelWriter(data_BMS_path) as writer:
+                    exp_df.to_excel(writer, sheet_name=  "train")
+                    exp_df.to_excel(writer, sheet_name = "test")
+                BMS_instances[experiment, chemical] = BMS_instance(data_path = data_BMS_path, **BMS_kwargs)
+                BMS_instances[experiment, chemical].run_BMS(mcmcsteps = 500)
+                ntries = 0
+                R2_train = BMS_instances[experiment,chemical].calculate_rsquare()["R2_train"]
+                while (ntries <= 3) and (R2_train <= 0.925):
+                    print(f"Recalculating. Actual R2 = {R2_train}")
+                    BMS_instances[experiment, chemical].run_BMS(mcmcsteps = 500)
+                    R2_train = BMS_instances[experiment,chemical].calculate_rsquare()["R2_train"]
+                    ntries += 1
+                    
+        self.BMS_instances = BMS_instances
+        
+        # We create the dataframe structure to save the BMS equations
+        dic_BMS_eq = {}
+        x1 = sym.symbols("x1")
+        for chemical in chemicals:
+            dic_BMS_eq[chemical] = pd.DataFrame(index = self.data_filtered.index.get_level_values(0).unique(),
+                                     columns = ["Model", "ParVal", "R2"])
+            for experiment in dic_BMS_eq[chemical].index:
+                dic_BMS_eq[chemical].loc[experiment, "Model"] = str(BMS_instances[experiment, chemical].mdl_model)
+                dic_BMS_eq[chemical].loc[experiment, "ParVal"] = str(BMS_instances[experiment, chemical].mdl_model.par_values["d0"])
+                dic_BMS_eq[chemical].loc[experiment, "R2"] = BMS_instances[experiment, chemical].calculate_rsquare()["R2_train"]
+                # Differential calculation:
+                dequation = sym.diff(dic_BMS_eq[chemical].loc[experiment, "Model"], x1)
+                dequation = dequation.subs(BMS_instances[experiment, chemical].mdl_model.par_values["d0"])
+                dic_BMS_eq[chemical].loc[experiment, "rate"] = str(dequation)
+                
+        with pd.ExcelWriter(os.path.join(exp_data_folder,"BMS_results.xlsx")) as writer:
+            for chemical in dic_BMS_eq.keys():
+                dic_BMS_eq[chemical].to_excel(writer, sheet_name = chemical)
+        self.dic_BMS_eq = dic_BMS_eq
+        
+    def data_state_BMS_generation(self, data = None, bms_data_path = None,
+                                  chemicals = None):
+        """Generates the data for the BMS in the state space
+
+        Args:
+            data (str, optional): Data. Defaults to None.
+            max_conv (float, optional): Maximum conversion of C3H6. Defaults to 100.
+        """        
+        if not data:
+            data = self.data_exp
+        else:
+            data = pd.read_excel(data, index_col = [0,1]) 
             
+        if not bms_data_path:
+            bms_data = self.dic_BMS_eq
+        else:
+            bms_data = {}
+            for chemical in chemicals:
+                bms_data[chemical] = pd.read_excel(bms_data_path, sheet_name=chemical, index_col=0)
+            self.dic_BMS_eq = bms_data 
+
+        # Create the folder to hold the BMS data in case it does not exist
+        data_folder = os.path.join(self.dump_folder, "BMS_state_space")
+        if self.noise:
+            folder_to_save = os.path.join(data_folder, "noisy")
+        else:
+            folder_to_save = os.path.join(data_folder, "nonnoisy")
+        os.makedirs(folder_to_save, exist_ok=True)
+        
+        # Filter regarding the conversion
+        self.data_filtered_2 = data.copy()
+        self.data_valid = self.data_filtered_2.copy()
+        
+        # Data for reading the bms equations
+        x1 = sym.symbols("x1")
+        
+        # Iterate through experiments and chemicals to generate true and calculated rate
+        matching_output_chemical = {i:j for i,j in zip(self.comp_order, range(9))}
+        P0 = 50
+        
+        for row in self.data_valid.index:
+            F = self.data_valid.loc[row, "FCO [mol/s]":"FAr [mol/s]"].to_numpy()
+            T = self.data_valid.loc[row, "T [K]"]
+            for chemical in chemicals:
+                self.data_valid.loc[row, f"True r{chemical} [mol/kgs]"] = MethanolProduction.kinetic_expression(F = F, T = T, 
+                                                                                                                           P = P0)[0][matching_output_chemical[chemical]]
+                diff1 = bms_data[chemical].loc[row[0], "rate"]
+                bms_diff_expr = sym.lambdify(args = x1, expr = sym.sympify(diff1))
+                self.data_valid.loc[row, f"Calc r{chemical} [mol/kgs]"] = bms_diff_expr(self.data_valid.loc[row, "W [kg]"])
+                
+        # Remove inf, -inf, and nan rows.
+        self.data_valid = self.data_valid.replace([np.inf, -np.inf], np.nan).dropna()
+        
+        # Generate the excel files necessary for the BMS stuff 
+        self.data_training_dic = {}   
+        for chemical in chemicals:
+            data_training = self.data_valid.loc[:, "pCO [bar]":"T [K]"].drop("pAr [bar]", axis = 1).copy()
+            data_training["BMS"]    = self.data_valid.loc[:, f"Calc r{chemical} [mol/kgs]"]
+            data_training["True"]   = self.data_valid.loc[:, f"True r{chemical} [mol/kgs]"]
+            data_training.index = [(i,j) for (i,j) in data_training.index]
+            self.data_training_dic[chemical] = data_training 
+            with pd.ExcelWriter(os.path.join(folder_to_save, f"BMS_train_{chemical}.xlsx")) as writer:
+                data_training.to_excel(writer, sheet_name = "train")
+                data_training.to_excel(writer, sheet_name = "test")
+                
+    def run_state_BMS(self, data_folder = None, chemicals = None, BMS_kwargs = None, mcmcsteps = 5000):
+        """Generates the BMS for the state variables for the designed chemicals
+
+        Args:
+            data_folder (_type_, optional): Path to the folder where the training excels are. Defaults to None.
+            chemicals (_type_, optional): List of chemicals. Defaults to None.
+            BMS_kwargs (_type_, optional): Keyword arguments to the BMS creation. Defaults to None.
+            mcmcsteps (int, optional): Number of mcmcsteps. Defaults to 5000.
+        """        
+
+        # Folder with all the BMS excel data
+        if not data_folder:
+            data_folder = os.path.join(self.dump_folder, "BMS_state_space")
+            if self.noise:
+                data_folder = os.path.join(data_folder, "noisy")
+            else:
+                data_folder = os.path.join(data_folder, "nonnoisy")
+                
+        # Folder to create to save the result of the BMS run. If it ever runs completely.
+        save_folder = os.path.join(self.dump_folder, "BMS_state_results")
+        if self.noise:
+            save_folder = os.path.join(save_folder, "noisy")
+        else:
+            save_folder = os.path.join(save_folder, "nonnoisy")
+        os.makedirs(save_folder, exist_ok=True)
+        
+        
+        
+        # Loop to create the BMS things
+        self.BMS_state_dic = {}
+        self.df_dic = {}
+        for chemical in chemicals:
+            excel_file = os.path.join(data_folder, f"BMS_train_{chemical}.xlsx")
+            self.BMS_state_dic[chemical, "True"] = BMS_instance(data_path = excel_file, chosen_output = 2, **BMS_kwargs)
+            self.BMS_state_dic[chemical, "True"].run_BMS(mcmcsteps=mcmcsteps)
+            self.BMS_state_dic[chemical, "Calc"] = BMS_instance(data_path = excel_file, chosen_output = 1, **BMS_kwargs)
+            self.BMS_state_dic[chemical, "Calc"].run_BMS(mcmcsteps=mcmcsteps)
             
+            self.df_dic[chemical] = pd.DataFrame(index = ["True", "Calc"], columns = ["Model", "ParValues", "R2"])
+            for model in self.df_dic[chemical].index:
+                self.df_dic[chemical].loc[model, "Model"] = str(self.BMS_state_dic[chemical,model].mdl_model)
+                self.df_dic[chemical].loc[model, "ParValues"] = str(self.BMS_state_dic[chemical,model].mdl_model.par_values["d0"])
+                self.df_dic[chemical].loc[model, "R2"] = self.BMS_state_dic[chemical,model].calculate_rsquare()["R2_train"]
+                self.df_dic[chemical].loc[model, "Time [min]"] = self.BMS_state_dic[chemical,model].training_time
+        with pd.ExcelWriter(os.path.join(save_folder, f"BMS_results.xlsx")) as writer:
+            for chemical in chemicals:
+                self.df_dic[chemical].to_excel(writer, sheet_name = chemical)
+                
+                
+    def calculate_test_experiment(self, BMS_models = "BMS_results.xlsx", chemicals = None, integrator = "LSODA",
+                             T_experiments = None, W_values = None, x0 = None):
+        """Plots a test experiment
+
+        Args:
+            BMS_models (path, optional): Path to excel file with the BMS models saved. Defaults to None.
+            chemicals (_type_, optional): List of chemicals to use the BMS. Defaults to None.
+            integrator (str, optional): Integrator for the solve_ivp function. Defaults to "LSODA".
+            T_experiments (list): Experiments to be done
+            W_values: Values where the integrator will answer something
+        """        
+        
+        # We set up the path of the xlsx
+        BMS_models_folder = os.path.join(self.dump_folder, "BMS_state_results", "noisy" if self.noise else "nonnoisy")
+        BMS_models = os.path.join(BMS_models_folder, BMS_models)
+        
+        matching_output_chemical = {"CO":1, "CH3OH":0}
+        # We read the True and calc function of the excel file and numpify it
+        self.BMS_True_eq = {}
+        self.BMS_Calc_eq = {}
+        for chemical in chemicals:
+            df_to_read = pd.read_excel(BMS_models, sheet_name=chemical, index_col=0)
+            self.BMS_True_eq[chemical] = sym.sympify(df_to_read.loc["True", "Model"]).subs(json.loads(df_to_read.loc["True", "ParValues"].replace("'", '"')))
+            self.BMS_Calc_eq[chemical] = sym.sympify(df_to_read.loc["Calc", "Model"]).subs(json.loads(df_to_read.loc["Calc", "ParValues"].replace("'", '"')))
+            self.BMS_True_eq[chemical] = sym.lambdify(["x" + str(i+1) for i in range(6)], self.BMS_True_eq[chemical])
+            self.BMS_Calc_eq[chemical] = sym.lambdify(["x" + str(i+1) for i in range(6)], self.BMS_Calc_eq[chemical])
+
+        # Calculate the initial flow rate
+        m0 = 10e-5                                  # kg/s
+        x0 = x0                                     # % mole
+        PM_mixture = (x0/100*self.comp_PM).sum()    # kg/kgmol
+        n0 = m0/PM_mixture                          # kgmol/s
+        F0 = n0*1000*x0/100                         # mol/s
+        P0 = 50                                     # bar
+        
+        labels = ["$CO$", "$H_2O$", "$CH_3OH$", "$H_2$", "$CO_2$", "$Ar$"]
+        
+        self.test_experiments = {}
+        self.match_true_eq = [(matching_output_chemical[i],self.BMS_True_eq[i]) for i in chemicals]
+        self.match_calc_eq = [(matching_output_chemical[i],self.BMS_Calc_eq[i]) for i in chemicals]
+        self.match_bms_eq = {"Real": None, "True": self.match_true_eq, "Calc": self.match_calc_eq}
+        for value in ["Real", "True", "Calc"]:
+            df_dic = {}
+            for n,T in enumerate(T_experiments):
+                # RLoop for the values
+                profile, W, partial, _ = MethanolProduction.generate_experiment(F0, P = P0, T = T, W_values=W_values, integrator=integrator, BMS_eq=self.match_bms_eq[value])
+                df_dic[T] = MethanolProduction.generate_df(labels, T, partial, W, profile)
+                multi_index = pd.MultiIndex.from_tuples(product([f"Exp{n+1}"], df_dic[T].index))
+                df_dic[T].set_index(multi_index, inplace = True)
+                if df_dic[T].isna().sum().sum() > 0:
+                    print(f"Problem in integration in BMS {value} at experiment {df_dic[T].index[0][0]}")
+                    
+            self.test_experiments[value] = pd.concat([df_dic[i] for i in df_dic])
+    
+    @staticmethod
+    def kinetic_expression(F, P:float,  T: float, BMS_eq = None):
+        """Reference: https://www.sciencedirect.com/science/article/pii/S0021951796901566
+        
+        CO2 + 3H2 <-> CH3OH + H2O       [rMeOH]
+        CO2 + H2  <-> CO + H2O          [rRWGS]
+
+        Args:
+            F (np.array): np.array of the molar flows [mol/s]
+            P (float): Total pressure [bar]
+            T (float): Temperature [K]
+            BMS_eq (listof tuples): Equation in case it comes from the BMS. e.g. BMS_eq = [(0, rC3G6eq), (1, rN2eq)]
+
+        Returns:
+            tuple: value of the different rates [mol/s·kg]
+        """
+        F[F<0] = 0
+        FCO, FH2O, FCH3OH, FH2, FCO2, FAr = F                   # mol/s
+        PCO, PH2O, PCH3OH, PH2, PCO2, PAr = F/(F.sum())*P       # bar
+        R = 8.31                                                     # kj/kgmol·K
+        
+        K       = 1.07*np.exp(36696/R/T)                                # K5aK2K3K4KH2
+        Keq1    = 10**(3066/T - 10.592)                                 # K*
+        k1      = 1.22e10*np.exp(-94765/R/T)                            # k1'
+        Keq3    = 1/10**(-2073/T + 2.029)                               # K3*
+        K2      = 3453.38                                               # KH2O/K8K9KH2
+        KH2O    = 6.62e-11*np.exp(124119/(R*T))                         # KH2O
+        KH2r    = 0.499*np.exp(17197/(R*T))                             # sqrt(KH2)
+        
+        rMeOH = K*PCO2*PH2*(1 - (1/Keq1)*(PH2O*PCH3OH/PH2**3/PCO2)) / (1 + (K2*PH2O/PH2) + KH2r*PH2**(0.5) + KH2O*PH2O)**3
+        rRWGS = k1*PCO2*(1 - Keq3*(PH2O*PCO/PCO2/PH2)) / (1 + (K2*PH2O/PH2) + KH2r*PH2**(0.5) + KH2O*PH2O)
+        
+        rate_list = [rMeOH, rRWGS]
+        
+        if BMS_eq:
+            for eq in BMS_eq:
+                rate_list[eq[0]] = eq[1](PCO, PH2O, PCH3OH, PH2, PCO2, T)
+        
+        rMeOH = rate_list[0]
+        rRWGS = rate_list[1]
+                
+        rCO     = rRWGS 
+        rH2O    =  rMeOH + rRWGS 
+        rCH3OH  = rMeOH 
+        rH2     = -rRWGS - 3*rMeOH 
+        rCO2    = - rMeOH - rRWGS
+        rAr     = 0
+        
+        return ([rCO, rH2O, rCH3OH, rH2, rCO2, rAr],
+                [PCO, PH2O, PCH3OH, PH2, PCO2, PAr])
+        
+    @staticmethod 
+    def ode_function(W, F, P: float, T:float, BMS_eq = None):
+        F[F < 0] = 1e-16   # Check to avoid negative things
+        return MethanolProduction.kinetic_expression(F, P, T, BMS_eq)[0]
+    
+    @staticmethod
+    def generate_experiment(F0, P:float, T: float, W_values = None, integrator = "LSODA", BMS_eq = None):
+        """Generation of an experiment
+
+        Args:
+            F0 (np.array): Initial vector of flows [mol/s]
+            P (float): Isobaric pressure [kPa]
+            T (float): Isothermal temperature [K]
+        """    
+        catalyst = 34.8e-3          # kg
+        if W_values is None:
+            W   = np.linspace(0, catalyst, 500)
+        else:
+            W = W_values
+
+        if integrator == "ODEINT":
+            integration_results = odeint(MethanolProduction.ode_function, F0, W, args = (P,T, BMS_eq), tfirst=True)
+            y_integration = integration_results
+            partial_pressures = integration_results/(integration_results.sum(axis = 1).reshape(-1,1))*P
+        else:
+            integration_results = solve_ivp(MethanolProduction.ode_function, 
+                                            (0, W_values[-1]), F0, t_eval = W, args = (P, T, BMS_eq),
+                                            method=integrator, rtol=1e-9, atol=1e-9)
+            y_integration = integration_results.y.T
+            partial_pressures = y_integration/(y_integration.sum(axis = 1).reshape(-1,1))*P
+        return y_integration, W, partial_pressures, integration_results
+    
+    @staticmethod
+    def generate_df(latex_labels: str, T: float, partial_pressures: any, W:any, F: any) -> any:
+        """Generate the dataframes for a experiment
+
+        Args:
+            latex_labels (str): Latex label for components, i.e., "$CO_2$"
+            T (float): Temperature of the experiment [K]
+            partial_pressures (array): Partial pressures of the components [bar]
+            W (array): Vector of catalyst mass [kg]
+            F (array): Molar flows of the profiles [mol/s]
+
+        Returns:
+            any: Pandas dataframe of a given experiment
+        """
+        df_plabels = ["p" + i[1:-1].replace("_","") + " [bar]" for i in latex_labels]
+        df_flabels = ["F" + i[1:-1].replace("_","") + " [mol/s]" for i in latex_labels]
+        df_labels = df_plabels + ["T [K]", "W [kg]"] + df_flabels
+        df = pd.DataFrame(index = range(partial_pressures.shape[0]), columns = df_labels)
+        df.loc[:, df_plabels] = partial_pressures
+        df.loc[:, "T [K]"] = T
+        df.loc[:, "W [kg]"] = W 
+        df.loc[:, df_flabels] = F
+        # We check the conversion of CO and CO2
+        df.loc[:, "convCO [%]"] = (df.loc[0, "FCO [mol/s]"] - df.loc[:, "FCO [mol/s]"])/(df.loc[0, "FCO [mol/s]"])*100
+        df.loc[:, "convCO2 [%]"] = (df.loc[0, "FCO2 [mol/s]"] - df.loc[:, "FCO2 [mol/s]"])/(df.loc[0, "FCO2 [mol/s]"])*100
+        return df 
+    
+    @staticmethod
+    def plot_experiment(data, chemicals:list, flows = True):
+        W = data.loc[:, "W [kg]"]
+        if flows:
+            chemical_flows = ["F" + i + " [mol/s]" for i in chemicals]
+            plt.figure()
+            for chemical,chemical_flow in zip(chemicals,chemical_flows):
+                plt.plot(W, data.loc[:, chemical_flow], label = chemical)
+            plt.xlabel("W [$kg$]")
+            plt.ylabel("F [$mol/s$]")
+            plt.legend(loc = "best")
+            plt.show()
+        else:
+            chemical_pressures = ["p" + i + " [bar]" for i in chemicals]
+            all_pressures = ["p" + i + " [bar]" for i in ["CO", "H2O", "CH3OH", "H2", "CO2", "Ar"]]
+            plt.figure()
+            for chemical, chemical_pressure in zip(chemicals, chemical_pressures):
+                plt.plot(W, data.loc[:, chemical_pressure]/data.loc[:, all_pressures].sum(axis = 1)*100, label = chemical)
+            plt.xlabel("W [$kg$]")
+            plt.ylabel("Conc [%]")
+            plt.legend(loc = "best")
+            plt.show()
             
+        
+        
+class AmonniaProduction:
+    """Dummy class to maintain these functions together https://www.sciencedirect.com/science/article/pii/S0959652617332730
+    """
+    def __init__(self, dump_folder:str, noise = False):
+        self.comp_order = ["N2", "O2", "H2O", "H2", "NH3", "Ar"]
+        self.dump_folder = dump_folder
+        self.noise = noise
+    
+    
+        
+        
         
